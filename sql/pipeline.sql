@@ -9,13 +9,14 @@ SELECT
     f.symbol,
     f.period,
     
-    -- Imputation Strategy: Local Mean (2 quarters before + 2 quarters after)
+    -- Imputation Strategy: Backward-looking Moving Average (4 quarters preceding)
+    -- Fix: Removed "2 FOLLOWING" to prevent data leakage from the future.
     COALESCE(f.net_margin, AVG(f.net_margin) OVER (
-        PARTITION BY symbol ORDER BY period ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING
+        PARTITION BY symbol ORDER BY period ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
     )) as net_margin,
     
     COALESCE(f.total_debt_to_equity, AVG(f.total_debt_to_equity) OVER (
-        PARTITION BY symbol ORDER BY period ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING
+        PARTITION BY symbol ORDER BY period ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
     )) as total_debt_to_equity,
     
     f.sales_per_share,
