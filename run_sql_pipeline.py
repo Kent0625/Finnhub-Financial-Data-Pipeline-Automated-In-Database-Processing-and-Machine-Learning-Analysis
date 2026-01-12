@@ -1,8 +1,11 @@
 import sqlite3
 import pandas as pd
+import os
 
-DB_PATH = 'finnhub_data.db'
-SQL_SCRIPT = 'sql/pipeline.sql'
+# Use dynamic paths relative to this script
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'finnhub_data.db')
+SQL_SCRIPT = os.path.join(BASE_DIR, 'sql', 'pipeline.sql')
 
 def execute_pipeline():
     conn = sqlite3.connect(DB_PATH)
@@ -20,7 +23,7 @@ def execute_pipeline():
         # Verify the Output
         print("\n--- Feature Engineering Output (First 5 Rows) ---")
         query = """
-        SELECT symbol, period, sales_per_share, sales_growth_yoy, eps_ma_4q
+        SELECT symbol, period, target_eps_growth, sales_growth_yoy, eps_momentum_qoq
         FROM v_model_features 
         WHERE sales_growth_yoy IS NOT NULL 
         ORDER BY period DESC 

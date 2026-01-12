@@ -2,21 +2,29 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
+import os
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 
-# Configuration
-DB_PATH = 'finnhub_project/finnhub_data.db'
+# Paths
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'finnhub_data.db')
 SYMBOL = 'MSFT'
+
+def mean_absolute_percentage_error(y_true, y_pred):
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    # Avoid division by zero
+    mask = y_true != 0
+    return np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
 
 def analyze():
     print(f"--- Starting Analysis for {SYMBOL} ---")
     
     # 1. Load Data
     conn = sqlite3.connect(DB_PATH)
+    # We need 'current_eps' to reconstruct the actual prices for MAPE
     query = """
-    SELECT period, eps, target_next_eps, sales_growth_yoy, eps_ma_4q, net_margin, total_debt_to_equity
+    SELECT period, current_eps, target_eps_growth, sales_growth_yoy, eps_momentum_qoq, net_margin, total_debt_to_equity
     FROM v_model_features
     WHERE symbol = ?
     ORDER BY period ASC
@@ -24,119 +32,99 @@ def analyze():
     df = pd.read_sql_query(query, conn, params=(SYMBOL,))
     conn.close()
     
-    # Convert period to datetime
     df['period'] = pd.to_datetime(df['period'])
     
     # 2. Preprocessing
     print(f"Total Records: {len(df)}")
-    # Drop rows with NaNs (created by Lag/Lead/Rolling functions)
     df_clean = df.dropna()
     print(f"Clean Records for ML: {len(df_clean)}")
     
     if len(df_clean) < 10:
-        print("Not enough data for ML.")
+        print("Not enough data.")
         return
 
-    # 3. EDA Visualization
+    # 3. EDA: Stationarity Check
     plt.figure(figsize=(10, 6))
-    plt.plot(df['period'], df['eps'], label='Actual EPS', marker='o')
-    plt.plot(df['period'], df['eps_ma_4q'], label='4-Qtr Moving Avg', linestyle='--')
-    plt.title(f'{SYMBOL} Quarterly EPS & Trend')
-    plt.xlabel('Date')
-    plt.ylabel('Earnings Per Share ($)')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('finnhub_project/eda_eps_trend.png')
-    print("EDA Plot saved to finnhub_project/eda_eps_trend.png")
+    plt.plot(df_clean['period'], df_clean['target_eps_growth'], label='EPS Growth Rate')
+    plt.axhline(0, color='red', linestyle='--')
+    plt.title('Stationarity Check: EPS Growth Rate over Time')
+    plt.ylabel('Growth Rate')
+    plt.savefig(os.path.join(BASE_DIR, 'eda_stationarity.png'))
+    print("EDA Plot saved.")
 
-    # 4. Machine Learning (Regression)
-    # Goal: Predict Next Quarter's EPS
-    features = ['sales_growth_yoy', 'net_margin', 'total_debt_to_equity', 'eps_ma_4q']
-    target = 'target_next_eps'
+    # 4. Machine Learning
+    features = ['sales_growth_yoy', 'eps_momentum_qoq', 'net_margin', 'total_debt_to_equity']
+    target = 'target_eps_growth'
     
     X = df_clean[features]
     y = df_clean[target]
     
-    # Time-based split (Train on past, Test on recent)
+    # Time-Series Split
     split_idx = int(len(X) * 0.8)
     X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
     y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
     
+    # Metadata for reconstruction
+    test_dates = df_clean['period'].iloc[split_idx:]
+    current_eps_test = df_clean['current_eps'].iloc[split_idx:]
+    
+    # A. Naive Baseline (Predict 0% growth aka Persistence Model)
+    y_pred_naive = np.zeros(len(y_test))
+    
+    # B. Linear Regression
     model = LinearRegression()
     model.fit(X_train, y_train)
+    y_pred_lr = model.predict(X_test)
     
-    # Predictions
-    y_pred = model.predict(X_test)
+    # 5. Evaluation (Reconstructed)
+    # Actual Future EPS = Current EPS * (1 + Actual Growth)
+    actual_future_eps = current_eps_test * (1 + y_test)
     
-    # 5. Evaluation
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    r2 = r2_score(y_test, y_pred)
+    # Predicted Future EPS (LR) = Current EPS * (1 + Predicted Growth)
+    pred_future_eps_lr = current_eps_test * (1 + y_pred_lr)
     
-    print("\n--- Model Evaluation ---")
-    print(f"Model: Linear Regression")
-    print(f"Features: {features}")
+    # Predicted Future EPS (Naive) = Current EPS * (1 + 0)
+    pred_future_eps_naive = current_eps_test
+    
+    # Metrics
+    rmse_lr = np.sqrt(mean_squared_error(actual_future_eps, pred_future_eps_lr))
+    rmse_naive = np.sqrt(mean_squared_error(actual_future_eps, pred_future_eps_naive))
+    
+    mape_lr = mean_absolute_percentage_error(actual_future_eps, pred_future_eps_lr)
+    mape_naive = mean_absolute_percentage_error(actual_future_eps, pred_future_eps_naive)
+    
+    print("\n--- Model Evaluation (Reconstructed EPS) ---")
     print(f"Test Set Size: {len(y_test)} quarters")
-    print(f"RMSE: ${rmse:.4f}")
-    print(f"R² Score: {r2:.4f}")
+    print(f"Naive Baseline RMSE: ${rmse_naive:.4f}")
+    print(f"Linear Regression RMSE: ${rmse_lr:.4f}")
     
-    print("\n--- Coefficients ---")
-    for feat, coef in zip(features, model.coef_):
-        print(f"{feat}: {coef:.4f}")
-        
-    # ... (Previous Regression Code)
-    # Visualization of Prediction
-    plt.figure(figsize=(10, 6))
-    plt.plot(y_test.index, y_test.values, label='Actual Next EPS', marker='o')
-    plt.plot(y_test.index, y_pred, label='Predicted Next EPS', marker='x', linestyle='--')
-    plt.title('Actual vs Predicted EPS (Test Set)')
-    plt.legend()
-    plt.savefig('finnhub_project/ml_prediction.png')
-    print("Prediction Plot saved to finnhub_project/ml_prediction.png")
+    print(f"Naive Baseline MAPE: {mape_naive:.2f}%")
+    print(f"Linear Regression MAPE: {mape_lr:.2f}%")
+    
+    if rmse_lr < rmse_naive:
+        print("RESULT: Linear Regression BEATS the Baseline.")
+    else:
+        print("RESULT: Linear Regression FAILS to beat the Baseline.")
 
-    # ---------------------------------------------------------
-    # PART 2: Classification (Predicting Growth vs. Decline)
-    # ---------------------------------------------------------
-    print("\n--- PART 2: Classification (Random Forest) ---")
-    
-    # Create Binary Target: 1 if Next EPS > Current EPS, else 0
-    df_clean['target_direction'] = (df_clean['target_next_eps'] > df_clean['eps']).astype(int)
-    
-    # Check class balance
-    print(f"Class Distribution (1=Growth, 0=Decline):\n{df_clean['target_direction'].value_counts()}")
-    
-    y_class = df_clean['target_direction']
-    
-    # Split Data
-    X_train_c, X_test_c = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train_c, y_test_c = y_class.iloc[:split_idx], y_class.iloc[split_idx:]
-    
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
-    
-    # Train Random Forest
-    rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-    rf_model.fit(X_train_c, y_train_c)
-    
-    # Predict
-    y_pred_c = rf_model.predict(X_test_c)
-    
-    # Evaluate
-    acc = accuracy_score(y_test_c, y_pred_c)
-    cm = confusion_matrix(y_test_c, y_pred_c)
-    
-    print(f"\nModel: Random Forest Classifier")
-    print(f"Accuracy: {acc:.4f}")
-    print("Confusion Matrix:")
-    print(cm)
-    print("\nClassification Report:")
-    print(classification_report(y_test_c, y_pred_c))
-    
-    # Feature Importance
-    importances = rf_model.feature_importances_
-    indices = np.argsort(importances)[::-1]
-    print("\nFeature Ranking:")
-    for f in range(X.shape[1]):
-        print(f"{f+1}. {features[indices[f]]} ({importances[indices[f]]:.4f})")
+    # 6. Residual Analysis
+    residuals = actual_future_eps - pred_future_eps_lr
+    plt.figure(figsize=(10, 6))
+    plt.scatter(test_dates, residuals)
+    plt.axhline(0, color='red', linestyle='--')
+    plt.title('Residual Analysis (Heteroscedasticity Check)')
+    plt.ylabel('Error ($)')
+    plt.savefig(os.path.join(BASE_DIR, 'ml_residuals.png'))
+    print("Residual Plot saved.")
+
+    # 7. Prediction Plot
+    plt.figure(figsize=(10, 6))
+    plt.plot(test_dates, actual_future_eps, label='Actual Future EPS', marker='o')
+    plt.plot(test_dates, pred_future_eps_lr, label='Predicted (LR)', marker='x', linestyle='--')
+    plt.plot(test_dates, pred_future_eps_naive, label='Naive Baseline', linestyle=':', alpha=0.5)
+    plt.title('Forecast: Actual vs Predicted EPS')
+    plt.legend()
+    plt.savefig(os.path.join(BASE_DIR, 'ml_forecast.png'))
+    print("Forecast Plot saved.")
 
 if __name__ == "__main__":
     analyze()

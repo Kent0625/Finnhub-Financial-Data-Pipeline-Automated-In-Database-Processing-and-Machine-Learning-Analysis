@@ -4,16 +4,16 @@
 
 This project implements an automated end-to-end data pipeline designed to extract, process, and analyze financial market data for Microsoft Corporation (MSFT). By leveraging the Finnhub API, the system harvests quarterly financial fundamentals (such as Sales Per Share, Earnings Per Share, and Net Margins) and stores them in a normalized relational database.
 
-The core value of this system lies in its usage of "In-Database Pipelining." Rather than processing data in external scripts, data cleaning, normalization, and feature engineering are handled directly within the database using SQL Views and Window Functions. This ensures data consistency and efficient processing.
+The core value of this system lies in its usage of "In-Database Pipelining." Rather than processing data in external scripts, data cleaning, normalization, and feature engineering are handled directly within the database using SQL Views and Window Functions.
 
-Finally, the processed data flows into a Machine Learning module that utilizes Linear Regression and Classification models to forecast future earnings and identify growth trends, providing actionable insights based on historical financial health.
+Finally, the processed data flows into a Machine Learning module that utilizes Linear Regression to forecast future **EPS Growth Rates**, rigorously evaluated against a Naive Baseline model.
 
 ## Key Features
 
 1.  **Automated Data Extraction**: A robust Python script that connects to the Finnhub API, handles rate limiting, and extracts over 30 years of historical financial data.
 2.  **Normalized Database Design**: A Star Schema architecture that separates company metadata from quantitative financial metrics, ensuring data integrity.
 3.  **In-Database Processing**: Advanced SQL logic (Window Functions, Imputation, and Normalization) allows for the automated calculation of complex metrics like Year-over-Year Growth and Moving Averages without external code.
-4.  **Predictive Analytics**: Integrated Machine Learning models that forecast future Earnings Per Share (EPS) and classify market trends.
+4.  **Rigorous Evaluation**: A statistically sound ML workflow that predicts stationary growth rates (not raw prices) and compares performance against a Persistence Baseline using MAPE (Mean Absolute Percentage Error).
 
 ## Technical Architecture
 
@@ -70,7 +70,7 @@ python ml_analysis.py
 ```
 This script will:
 *   Generate trend visualization charts (saved as images in the project folder).
-*   Train the Linear Regression model and output the Root Mean Squared Error (RMSE).
-*   Train the Random Forest Classifier and output the Accuracy score.
+*   Train the Linear Regression model and output the MAPE (Mean Absolute Percentage Error).
+*   Compare performance against a Naive Baseline model.
 
 Alternatively, you can open `Phase3_Analysis.ipynb` in Jupyter Notebook for an interactive walkthrough of the analysis.
